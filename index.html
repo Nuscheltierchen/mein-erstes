@@ -76,7 +76,7 @@ button:disabled { opacity: .55; cursor: default; transform: none; }
   overflow: hidden;
 }
 canvas { display: block; }
-#board { width: 100%; height: auto; }
+#board { width: 100%; height: auto; touch-action: none; user-select: none; }
 aside { display: grid; align-content: start; gap: 7px; min-width: 0; }
 .card {
   margin: 0;
@@ -87,7 +87,7 @@ aside { display: grid; align-content: start; gap: 7px; min-width: 0; }
 }
 dt, .preview-label { color: var(--muted); font-size: 11px; }
 dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.15 ui-monospace, monospace; overflow-wrap: anywhere; }
-#preview { width: min(100%, 66px); height: auto; margin: 2px auto 0; }
+#preview, #held-preview { width: min(100%, 66px); height: auto; margin: 2px auto 0; }
 #overlay {
   position: absolute;
   inset: 0;
@@ -105,8 +105,9 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
 .controls button { display: grid; place-content: center; min-height: 48px; padding: 3px 0; box-shadow: 0 2px #1c1223; }
 .controls strong { font: 700 21px/1 system-ui, sans-serif; }
 .controls span { font-size: 10px; }
+.touch-hint { display: none; }
 .hint { color: var(--muted); margin: 12px 3px 0; text-align: center; font-size: 12px; }
-@media (pointer: coarse) { .hint { display: none; } }
+@media (any-pointer: coarse) { .keyboard-hint { display: none; } .touch-hint { display: block; } }
 @media (max-width: 360px) { body { padding: 12px 8px; } }
 </style>
 </head>
@@ -124,6 +125,7 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
       </div>
       <aside aria-label="Spielstand">
         <div class="card"><div class="preview-label">Als Nächstes</div><canvas id="preview" width="80" height="57" aria-label="Nächster Spielstein"></canvas></div>
+        <button class="card" id="hold" type="button" disabled><span class="preview-label">Reserve</span><canvas id="held-preview" width="80" height="41" aria-hidden="true"></canvas></button>
         <dl class="card"><dt>Punkte</dt><dd id="score">0</dd></dl>
         <dl class="card"><dt>Bestwert</dt><dd id="record">0</dd></dl>
         <dl class="card"><dt>Reihen</dt><dd id="lines">0</dd></dl>
@@ -138,14 +140,20 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
       <button type="button" data-action="drop"><strong aria-hidden="true">⤓</strong><span>Fallen</span></button>
     </div>
   </section>
-  <p class="hint">← → Bewegen · ↑ Drehen · ↓ Tiefer · Leertaste Fallen · P Pause</p>
+  <p class="hint keyboard-hint">← → Bewegen · ↑ Drehen · ↓ Tiefer · Leertaste Fallen · C Reserve · P Pause</p>
+  <p class="hint touch-hint">Auf dem Spielfeld tippen zum Drehen · seitlich wischen zum Schieben · runterziehen oder schnell runterwischen zum Fallen · hochwischen für die Reserve</p>
 </main>
 <script>
 "use strict";
 
 const byId = id => document.getElementById(id);
-const boardContext = byId("board").getContext("2d");
+const board = byId("board");
+const boardContext = board.getContext("2d");
 const previewContext = byId("preview").getContext("2d");
+const heldContext = byId("held-preview").getContext("2d");
+const holdButton = byId("hold");
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const clearDuration = 300;
 const overlay = byId("overlay");
 const startButton = byId("start");
 const pauseButton = byId("pause");
@@ -163,6 +171,10 @@ const pieces = {
 };
 
 let field, bag, piece, next, score, lines, level;
+let held = null;
+let holdUsed = false;
+let clearing = null;
+let gesture = null;
 let state = "ready";
 let nextFall = 0;
 let best = 0;
@@ -192,11 +204,13 @@ function collides(x, y, shape) {
   });
 }
 
-function spawn() {
-  const type = next;
+function spawn(type) {
+  if (!type) {
+    type = next;
+    next = drawFromBag();
+  }
   const shape = pieces[type].shape;
   piece = { type, shape, x: Math.floor((columns - shape.length) / 2), y: 0 };
-  next = drawFromBag();
   if (collides(piece.x, piece.y, shape)) {
     piece = null;
     setState("over");
@@ -209,6 +223,8 @@ function delay() {
 
 function setState(value) {
   state = value;
+  gesture = null;
+  updateHoldButton();
   overlay.hidden = value === "playing";
   pauseButton.disabled = value === "ready" || value === "over";
   pauseButton.textContent = value === "paused" ? "Weiter" : "Pause";
@@ -225,6 +241,8 @@ function setState(value) {
 function reset() {
   field = Array.from({ length: rows }, emptyRow);
   bag = [];
+  held = clearing = null;
+  holdUsed = false;
   score = lines = 0;
   level = 1;
   next = drawFromBag();
@@ -233,6 +251,21 @@ function reset() {
   nextFall = performance.now() + delay();
   updateStats();
   draw();
+}
+
+function updateHoldButton() {
+  holdButton.disabled = state !== "playing" || holdUsed || Boolean(clearing);
+  holdButton.setAttribute("aria-label", held ? "Reserve tauschen (" + held + ")" : "Stein in Reserve legen");
+}
+
+function hold() {
+  if (holdUsed) return;
+  const incoming = held;
+  held = piece.type;
+  holdUsed = true;
+  spawn(incoming);
+  nextFall = performance.now() + delay();
+  updateHoldButton();
 }
 
 function updateStats() {
@@ -254,14 +287,33 @@ function lock() {
     return;
   }
   for (const [x, y] of cells) field[piece.y + y][piece.x + x] = piece.type;
-  field = field.filter(row => row.includes(null));
-  const cleared = rows - field.length;
-  field.unshift(...Array.from({ length: cleared }, emptyRow));
-  score += [0, 100, 300, 500, 800][cleared] * level;
-  lines += cleared;
+  const fullRows = field.flatMap((row, index) => row.includes(null) ? [] : [index]);
+  piece = null;
+  gesture = null;
+  holdUsed = false;
+  if (!fullRows.length) {
+    spawn();
+    updateHoldButton();
+    updateStats();
+    return;
+  }
+  score += [0, 100, 300, 500, 800][fullRows.length] * level;
+  lines += fullRows.length;
   level = 1 + Math.floor(lines / 10);
-  spawn();
+  clearing = { rows: fullRows, elapsed: 0, lastFrame: performance.now() };
+  if (reducedMotion.matches) finishClear();
+  updateHoldButton();
   updateStats();
+}
+
+function finishClear() {
+  const cleared = clearing.rows;
+  field = field.filter((_, index) => !cleared.includes(index));
+  field.unshift(...Array.from({ length: cleared.length }, emptyRow));
+  clearing = null;
+  spawn();
+  nextFall = performance.now() + delay();
+  updateHoldButton();
 }
 
 function step(manual) {
@@ -283,9 +335,12 @@ function landingRow() {
   return y;
 }
 
-function rotate() {
+function rotate(clockwise) {
   if (piece.type === "O") return;
-  const rotated = piece.shape.map((row, y) => row.map((_, x) => piece.shape[piece.shape.length - 1 - x][y]));
+  const size = piece.shape.length;
+  const rotated = piece.shape.map((row, y) => row.map((_, x) =>
+    clockwise ? piece.shape[size - 1 - x][y] : piece.shape[x][size - 1 - y]
+  ));
   for (const [dx, dy] of [[0,0],[-1,0],[1,0],[-2,0],[2,0],[0,-1],[-1,-1],[1,-1],[0,-2]]) {
     if (collides(piece.x + dx, piece.y + dy, rotated)) continue;
     piece.x += dx;
@@ -296,7 +351,7 @@ function rotate() {
 }
 
 function act(action) {
-  if (state !== "playing") return;
+  if (state !== "playing" || !piece) return;
   switch (action) {
     case "left":
     case "right": {
@@ -304,7 +359,9 @@ function act(action) {
       if (!collides(x, piece.y, piece.shape)) piece.x = x;
       break;
     }
-    case "rotate": rotate(); break;
+    case "rotate": rotate(true); break;
+    case "rotate-left": rotate(false); break;
+    case "hold": hold(); break;
     case "down": step(true); break;
     case "drop": {
       const y = landingRow();
@@ -353,15 +410,48 @@ function draw() {
       block(boardContext, (piece.x + x) * cell, (piece.y + y) * cell, cell, piece.type);
     }
   }
-  previewContext.clearRect(0, 0, 80, 57);
-  if (!next) return;
-  const cells = occupiedCells(pieces[next].shape);
+  if (clearing) drawStars();
+  drawPreview(previewContext, next);
+  drawPreview(heldContext, held);
+}
+
+function drawStars() {
+  const progress = Math.min(1, clearing.elapsed / clearDuration);
+  boardContext.save();
+  for (const row of clearing.rows) {
+    boardContext.globalAlpha = .44 * (1 - progress);
+    boardContext.fillStyle = "#fff0cf";
+    boardContext.fillRect(0, row * cell, board.width, cell);
+    boardContext.globalAlpha = Math.min(1, (1 - progress) * 2);
+    for (let i = 0; i < 13; i++) {
+      const x = (i + .5) * board.width / 13 + Math.sin(i * 5 + row) * progress * 22;
+      const y = (row + .5) * cell - (16 + (i * 13 % 32)) * progress;
+      const radius = (3 + i % 4) * (1 - progress * .6);
+      boardContext.fillStyle = ["#fff1c6", "#fbbbd9", "#c9b8ff"][i % 3];
+      boardContext.beginPath();
+      for (let point = 0; point < 8; point++) {
+        const angle = point * Math.PI / 4;
+        const distance = point % 2 ? radius * .29 : radius;
+        boardContext.lineTo(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance);
+      }
+      boardContext.closePath();
+      boardContext.fill();
+    }
+  }
+  boardContext.restore();
+}
+
+function drawPreview(context, type) {
+  const { width, height } = context.canvas;
+  context.clearRect(0, 0, width, height);
+  if (!type) return;
+  const cells = occupiedCells(pieces[type].shape);
   const xs = cells.map(([x]) => x);
   const ys = cells.map(([, y]) => y);
   const size = 16;
-  const xOffset = (80 - (Math.min(...xs) + Math.max(...xs) + 1) * size) / 2;
-  const yOffset = (57 - (Math.min(...ys) + Math.max(...ys) + 1) * size) / 2;
-  for (const [x, y] of cells) block(previewContext, xOffset + x * size, yOffset + y * size, size, next);
+  const xOffset = (width - (Math.min(...xs) + Math.max(...xs) + 1) * size) / 2;
+  const yOffset = (height - (Math.min(...ys) + Math.max(...ys) + 1) * size) / 2;
+  for (const [x, y] of cells) block(context, xOffset + x * size, yOffset + y * size, size, type);
 }
 
 function togglePause() {
@@ -369,7 +459,9 @@ function togglePause() {
     setState("paused");
   } else if (state === "paused") {
     setState("playing");
-    nextFall = performance.now() + delay();
+    const now = performance.now();
+    nextFall = now + delay();
+    if (clearing) clearing.lastFrame = now;
   }
 }
 
@@ -379,7 +471,80 @@ for (const button of document.querySelectorAll("[data-action]")) {
   button.addEventListener("click", () => act(button.dataset.action));
 }
 
-const keys = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "rotate", ArrowDown: "down", Space: "drop" };
+holdButton.addEventListener("click", () => act("hold"));
+
+function touchStart(event) {
+  if (event.pointerType === "mouse" || !event.isPrimary || state !== "playing" || !piece) return;
+  const bounds = board.getBoundingClientRect();
+  board.setPointerCapture(event.pointerId);
+  gesture = {
+    id: event.pointerId, piece, x: event.clientX, y: event.clientY,
+    anchorX: event.clientX, anchorY: event.clientY, started: event.timeStamp,
+    midpoint: bounds.left + bounds.width / 2,
+    stride: Math.max(12, bounds.width / columns),
+    axis: null, samples: [{ y: event.clientY, time: event.timeStamp }]
+  };
+}
+
+function trackGesture(event) {
+  const touch = gesture;
+  if (!touch || touch.id !== event.pointerId || touch.piece !== piece) return;
+  const dx = event.clientX - touch.x;
+  const dy = event.clientY - touch.y;
+  while (touch.samples.length > 1 && touch.samples[1].time < event.timeStamp - 90) touch.samples.shift();
+  touch.samples.push({ y: event.clientY, time: event.timeStamp });
+  if (!touch.axis && Math.max(Math.abs(dx), Math.abs(dy)) >= 9) {
+    touch.axis = Math.abs(dx) >= Math.abs(dy) ? "horizontal" : "vertical";
+  }
+  if (touch.axis === "horizontal") {
+    let distance = event.clientX - touch.anchorX;
+    while (Math.abs(distance) >= touch.stride) {
+      const direction = Math.sign(distance);
+      act(direction > 0 ? "right" : "left");
+      touch.anchorX += direction * touch.stride;
+      distance = event.clientX - touch.anchorX;
+    }
+  } else if (touch.axis === "vertical") {
+    let moved = false;
+    while (event.clientY - touch.anchorY >= touch.stride) {
+      touch.anchorY += touch.stride;
+      if (collides(piece.x, piece.y + 1, piece.shape)) break;
+      step(true);
+      moved = true;
+    }
+    if (moved) draw();
+  }
+}
+
+function touchEnd(event) {
+  trackGesture(event);
+  const touch = gesture;
+  if (!touch || touch.id !== event.pointerId || touch.piece !== piece) return;
+  gesture = null;
+  const dy = event.clientY - touch.y;
+  if (!touch.axis) {
+    if (event.timeStamp - touch.started < 400) {
+      act(event.clientX < touch.midpoint ? "rotate-left" : "rotate");
+    }
+  } else if (touch.axis === "vertical") {
+    const recent = touch.samples[0];
+    const speed = (event.clientY - recent.y) / Math.max(1, event.timeStamp - recent.time);
+    if (dy >= 22 && speed >= .42) act("drop");
+    if (dy <= -Math.max(24, touch.stride)) act("hold");
+  }
+}
+
+function cancelGesture(event) {
+  if (gesture?.id === event.pointerId) gesture = null;
+}
+
+board.addEventListener("pointerdown", touchStart);
+board.addEventListener("pointermove", trackGesture);
+board.addEventListener("pointerup", touchEnd);
+board.addEventListener("pointercancel", cancelGesture);
+board.addEventListener("lostpointercapture", cancelGesture);
+
+const keys = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "rotate", ArrowDown: "down", Space: "drop", KeyC: "hold" };
 document.addEventListener("keydown", event => {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
   if (event.code === "KeyP" || event.code === "Escape") {
@@ -389,7 +554,7 @@ document.addEventListener("keydown", event => {
   const action = keys[event.code];
   if (!action || state !== "playing" || (action === "drop" && event.target.tagName === "BUTTON" && event.target !== startButton)) return;
   event.preventDefault();
-  if (event.repeat && (action === "drop" || action === "rotate")) return;
+  if (event.repeat && (action === "drop" || action === "rotate" || action === "hold")) return;
   act(action);
 });
 
@@ -398,9 +563,16 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function tick(time) {
-  if (state === "playing" && time >= nextFall) {
-    step(false);
-    draw();
+  if (state === "playing") {
+    if (clearing) {
+      clearing.elapsed += Math.max(0, time - clearing.lastFrame);
+      clearing.lastFrame = time;
+      if (clearing.elapsed >= clearDuration || reducedMotion.matches) finishClear();
+      draw();
+    } else if (time >= nextFall) {
+      step(false);
+      draw();
+    }
   }
   requestAnimationFrame(tick);
 }
