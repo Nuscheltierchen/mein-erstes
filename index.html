@@ -2,7 +2,10 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tetris">
 <meta name="theme-color" content="#211626">
 <title>Tetris · Pastell-Arcade</title>
 <style>
@@ -15,10 +18,17 @@
   --line: #59405f;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { touch-action: manipulation; background: #211626; }
 body {
   margin: 0;
   min-height: 100svh;
-  padding: 20px 12px;
+  --gutter-block: 20px;
+  --gutter-inline: 12px;
+  padding: max(var(--gutter-block), env(safe-area-inset-top, 0px))
+    max(var(--gutter-inline), env(safe-area-inset-right, 0px))
+    max(var(--gutter-block), env(safe-area-inset-bottom, 0px))
+    max(var(--gutter-inline), env(safe-area-inset-left, 0px));
   display: grid;
   place-items: center;
   color: var(--ink);
@@ -31,6 +41,7 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-bottom: 14px;
   padding: 0 4px;
 }
@@ -57,7 +68,17 @@ button:hover { background: #553a60; }
 button:focus-visible { outline: 3px solid #b5eee1; outline-offset: 3px; }
 button:active { transform: translateY(2px); }
 button:disabled { opacity: .55; cursor: default; transform: none; }
-#pause { padding: 0 14px; }
+#pause, #fullscreen { padding: 0 9px; }
+.header-actions { display: flex; gap: 6px; }
+#fullscreen-help {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: #261a2d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
 .machine {
   padding: clamp(8px, 2.5vw, 16px);
   background: var(--panel);
@@ -68,7 +89,7 @@ button:disabled { opacity: .55; cursor: default; transform: none; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(76px, 24%, 115px); gap: clamp(7px, 2.5vw, 13px); }
 .well {
   position: relative;
-  width: min(100%, 265px, max(148px, calc((100svh - 218px) / 2)));
+  width: min(100%, 265px, max(148px, calc((100svh - 218px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / 2)));
   justify-self: end;
   background: #19131f;
   border: 2px solid #73567b;
@@ -108,12 +129,19 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
 .touch-hint { display: none; }
 .hint { color: var(--muted); margin: 12px 3px 0; text-align: center; font-size: 12px; }
 @media (any-pointer: coarse) { .keyboard-hint { display: none; } .touch-hint { display: block; } }
-@media (max-width: 360px) { body { padding: 12px 8px; } }
+@media (max-width: 360px) { body { --gutter-block: 12px; --gutter-inline: 8px; } }
 </style>
 </head>
 <body>
 <main>
-  <header><h1>Tetris</h1><button id="pause" type="button" disabled>Pause</button></header>
+  <header>
+    <h1>Tetris</h1>
+    <div class="header-actions">
+      <button id="fullscreen" type="button" hidden>Vollbild</button>
+      <button id="pause" type="button" disabled>Pause</button>
+    </div>
+  </header>
+  <p id="fullscreen-help" role="status" hidden></p>
   <section class="machine" aria-label="Tetris-Spiel">
     <div class="layout">
       <div class="well">
@@ -543,6 +571,62 @@ board.addEventListener("pointermove", trackGesture);
 board.addEventListener("pointerup", touchEnd);
 board.addEventListener("pointercancel", cancelGesture);
 board.addEventListener("lostpointercapture", cancelGesture);
+
+// WebKit can allow pinch zoom even with a fixed viewport scale.
+function stopPinch(event) {
+  if (event.touches.length < 2) return;
+  gesture = null;
+  if (event.cancelable) event.preventDefault();
+}
+
+document.addEventListener("touchstart", stopPinch, { passive: false });
+document.addEventListener("touchmove", stopPinch, { passive: false });
+for (const type of ["gesturestart", "gesturechange"]) {
+  document.addEventListener(type, event => {
+    gesture = null;
+    if (event.cancelable) event.preventDefault();
+  }, { passive: false });
+}
+
+const fullscreenButton = byId("fullscreen");
+const fullscreenHelp = byId("fullscreen-help");
+const canFullscreen = Boolean(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+const isIPhone = /iPhone|iPod/.test(navigator.userAgent);
+const standalone = navigator.standalone || window.matchMedia("(display-mode: standalone)").matches;
+fullscreenButton.hidden = Boolean(standalone || (!canFullscreen && !isIPhone));
+
+if (isIPhone) {
+  fullscreenHelp.textContent = "Öffne das Spiel in Safari. Wähle Teilen → Zum Home-Bildschirm → Als Web-App öffnen (falls angezeigt) → Hinzufügen. Starte Tetris dann über das neue Symbol.";
+}
+
+if (!canFullscreen) {
+  fullscreenButton.setAttribute("aria-controls", "fullscreen-help");
+  fullscreenButton.setAttribute("aria-expanded", "false");
+}
+
+fullscreenButton.addEventListener("click", async () => {
+  if (!canFullscreen) {
+    fullscreenHelp.hidden = !fullscreenHelp.hidden;
+    fullscreenButton.setAttribute("aria-expanded", String(!fullscreenHelp.hidden));
+    return;
+  }
+
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
+    fullscreenHelp.hidden = true;
+  } catch {
+    if (!isIPhone) fullscreenHelp.textContent = "Der Browser konnte den Vollbildmodus gerade nicht öffnen.";
+    fullscreenHelp.hidden = false;
+  }
+});
+
+document.addEventListener("fullscreenchange", () => {
+  fullscreenButton.textContent = document.fullscreenElement ? "Vollbild aus" : "Vollbild";
+});
 
 const keys = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "rotate", ArrowDown: "down", Space: "drop", KeyC: "hold" };
 document.addEventListener("keydown", event => {
