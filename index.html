@@ -254,6 +254,12 @@ const heldContext = byId("held-preview").getContext("2d");
 const holdButton = byId("hold");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const clearDuration = 470;
+const starPalettes = [
+  ["#ffe780", "#ffad60", "#fff6c7", "#ff89b3"],
+  ["#ff81ca", "#c5a0ff", "#83ffdf", "#fff5e9"],
+  ["#a3ffdf", "#7bc7ff", "#d4abff", "#e2fff3"]
+];
+let nextStarEffect = 0;
 const starEffects = byId("star-effects");
 let starPreference = null;
 try { starPreference = localStorage.getItem("tetris.starEffects"); } catch {}
@@ -414,8 +420,12 @@ function lock() {
   score += [0, 100, 300, 500, 800][fullRows.length] * level;
   lines += fullRows.length;
   level = 1 + Math.floor(lines / 10);
-  clearing = { rows: fullRows, elapsed: 0, lastFrame: performance.now() };
-  if (!starEffects.checked) finishClear();
+  clearing = { rows: fullRows, elapsed: 0, lastFrame: performance.now(), effect: nextStarEffect };
+  if (starEffects.checked) {
+    nextStarEffect = (nextStarEffect + 1) % starPalettes.length;
+  } else {
+    finishClear();
+  }
   updateHoldButton();
   updateStats();
 }
@@ -545,21 +555,24 @@ function drawStars() {
   const height = board.height;
   const clearedRows = clearing.rows;
   const tetris = clearedRows.length === 4;
-  const colors = ["#ffe780", "#ff81ca", "#c5a0ff", "#83ffdf", "#fff5e9"];
+  const effect = clearing.effect;
+  const colors = starPalettes[effect];
+  const gold = effect === 0;
+  const aurora = effect === 2;
 
   context.save();
   context.globalAlpha = impact * (tetris ? .24 : .12);
-  context.fillStyle = tetris ? "#fbb5ff" : "#c797ff";
+  context.fillStyle = tetris ? "#fbb5ff" : colors[1];
   context.fillRect(0, 0, width, height);
 
   for (const row of clearedRows) {
     const centerY = (row + .5) * cell;
     const glow = context.createLinearGradient(0, centerY - 40, 0, centerY + 40);
-    glow.addColorStop(0, "#ff78da00");
-    glow.addColorStop(.32, "#ff78da80");
-    glow.addColorStop(.5, "#fff5cb");
-    glow.addColorStop(.68, "#b78dff80");
-    glow.addColorStop(1, "#b78dff00");
+    glow.addColorStop(0, colors[0] + "00");
+    glow.addColorStop(.32, colors[0] + "80");
+    glow.addColorStop(.5, "#fff9ed");
+    glow.addColorStop(.68, colors[1] + "80");
+    glow.addColorStop(1, colors[1] + "00");
     context.globalAlpha = (1 - progress) ** 2;
     context.fillStyle = glow;
     context.fillRect(0, centerY - 40, width, 80);
@@ -569,18 +582,34 @@ function drawStars() {
     context.fillRect(0, centerY - 4, width, 8);
 
     context.globalAlpha = fade * .8;
-    context.strokeStyle = "#fff0b3";
+    context.strokeStyle = colors[0];
     context.lineWidth = 3;
-    context.beginPath();
-    context.ellipse(width / 2, centerY, 26 + 200 * spread, 5 + 65 * spread, 0, 0, Math.PI * 2);
-    context.stroke();
+    if (aurora) {
+      for (let ribbon = 0; ribbon < 3; ribbon++) {
+        context.strokeStyle = colors[ribbon];
+        context.beginPath();
+        for (let x = 0; x <= width; x += 5) {
+          const waveY = centerY - (12 + ribbon * 16) * spread
+            + Math.sin(x / 43 + ribbon * .75 - progress * 9) * 24 * spread;
+          context.lineTo(x, waveY);
+        }
+        context.stroke();
+      }
+    } else {
+      context.beginPath();
+      context.ellipse(width / 2, centerY, 26 + 200 * spread, 5 + 65 * spread, 0, 0, Math.PI * 2);
+      context.stroke();
+    }
 
     for (let i = 0; i < 21; i++) {
       const origin = (i + .5) * width / 21;
-      const drift = Math.sin(i * 4.7 + row) * 64;
+      const scatter = Math.sin(i * 4.7 + row);
+      const drift = gold ? scatter * 36 : aurora ? 34 * Math.cos(i * .6) : (origin - width / 2) * .58 + scatter * 40;
       const rise = 30 + (i * 29 % 110);
       const x = origin + drift * spread;
-      const y = centerY - rise * spread + 28 * progress ** 2;
+      const arc = gold ? 105 * progress ** 2 : 28 * progress ** 2;
+      const ripple = aurora ? Math.sin(origin / 43 - progress * 9) * 24 * spread : 0;
+      const y = centerY - rise * spread + arc + ripple;
       const large = i % 4 === 0;
       const radius = (large ? 20 : 6 + i % 5) * (.72 + .48 * Math.sin(Math.PI * progress));
       const color = colors[i % colors.length];
