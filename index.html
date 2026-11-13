@@ -86,6 +86,12 @@ button:active { transform: translateY(2px); }
 button:disabled { opacity: .55; cursor: default; transform: none; }
 #pause, #fullscreen { padding: 0 9px; }
 .header-actions { display: flex; gap: 6px; }
+#refresh {
+  min-width: 44px;
+  padding: 0;
+  color: var(--peach);
+  font: 700 23px/1 system-ui, sans-serif;
+}
 #fullscreen-help {
   position: absolute;
   z-index: 2;
@@ -189,6 +195,7 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
   <header>
     <h1>Tetris</h1>
     <div class="header-actions">
+      <button id="refresh" type="button" aria-label="Spiel aktualisieren" title="Spiel aktualisieren">⟳</button>
       <button id="fullscreen" type="button" hidden>Vollbild</button>
       <button id="pause" type="button" disabled>Pause</button>
     </div>
@@ -678,6 +685,14 @@ for (const type of ["gesturestart", "gesturechange"]) {
     if (event.cancelable) event.preventDefault();
   }, { passive: false });
 }
+
+byId("refresh").addEventListener("click", () => {
+  const roundActive = state === "playing" || state === "paused";
+  if (roundActive && !window.confirm("Spiel aktualisieren? Die aktuelle Runde wird beendet.")) return;
+  const freshUrl = new URL(window.location.href);
+  freshUrl.searchParams.set("reload", Date.now().toString(36));
+  window.location.replace(freshUrl.href);
+});
 
 const fullscreenButton = byId("fullscreen");
 const fullscreenHelp = byId("fullscreen-help");
