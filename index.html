@@ -159,6 +159,18 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
 #overlay h2 { font-size: clamp(18px, 4vw, 28px); margin: 0 0 10px; }
 #overlay button { padding: 0 10px; color: #301a2e; background: var(--peach); border-color: #ffe0cd; font-weight: 800; }
 #overlay button:hover { background: #ffdac6; }
+.star-setting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.star-setting input { margin: 0; accent-color: var(--peach); }
 .controls { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .controls button { display: grid; place-content: center; min-height: 48px; padding: 3px 0; box-shadow: 0 2px #1c1223; }
 .controls strong { font: 700 21px/1 system-ui, sans-serif; }
@@ -208,6 +220,7 @@ dd { margin: 1px 0 0; color: var(--peach); font: 700 clamp(13px, 3.3vw, 20px)/1.
         <div id="overlay">
           <h2 id="status" aria-live="polite">Bereit?</h2>
           <button id="start" type="button">Spielen</button>
+          <label class="star-setting"><input id="star-effects" type="checkbox"> Sternchen</label>
         </div>
       </div>
       <aside aria-label="Spielstand">
@@ -241,6 +254,20 @@ const heldContext = byId("held-preview").getContext("2d");
 const holdButton = byId("hold");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const clearDuration = 470;
+const starEffects = byId("star-effects");
+let starPreference = null;
+try { starPreference = localStorage.getItem("tetris.starEffects"); } catch {}
+
+function syncStarEffects() {
+  starEffects.checked = starPreference === null ? !reducedMotion.matches : starPreference === "on";
+}
+
+syncStarEffects();
+reducedMotion.addEventListener("change", syncStarEffects);
+starEffects.addEventListener("change", () => {
+  starPreference = starEffects.checked ? "on" : "off";
+  try { localStorage.setItem("tetris.starEffects", starPreference); } catch {}
+});
 const overlay = byId("overlay");
 const startButton = byId("start");
 const pauseButton = byId("pause");
@@ -388,7 +415,7 @@ function lock() {
   lines += fullRows.length;
   level = 1 + Math.floor(lines / 10);
   clearing = { rows: fullRows, elapsed: 0, lastFrame: performance.now() };
-  if (reducedMotion.matches) finishClear();
+  if (!starEffects.checked) finishClear();
   updateHoldButton();
   updateStats();
 }
@@ -757,7 +784,7 @@ function tick(time) {
     if (clearing) {
       clearing.elapsed += Math.max(0, time - clearing.lastFrame);
       clearing.lastFrame = time;
-      if (clearing.elapsed >= clearDuration || reducedMotion.matches) finishClear();
+      if (clearing.elapsed >= clearDuration || !starEffects.checked) finishClear();
       draw();
     } else if (time >= nextFall) {
       step(false);
